@@ -1,0 +1,27 @@
+{
+  "name": "pdf_exporter",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.18",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "jsdom": "^31.0.1",
+    "playwright": "^1.65.1"
+  }
+}
