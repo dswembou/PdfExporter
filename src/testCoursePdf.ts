@@ -1,4 +1,3 @@
-
 import "dotenv/config";
 import { chromium } from "playwright";
 import { JSDOM } from "jsdom";
@@ -6,6 +5,13 @@ import createDOMPurify from "dompurify";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { embedCanvasImages } from "./canvasImages.js";
+import { getPdfLinkDestinations } from "./pdfPageMapper.js";
+import { getCanvasAssignment } from "./canvasAssignments.js";
+
+import {
+  renderAssignment,
+  assignmentStyles
+} from "./assignmentRenderer.js";
 
 interface CanvasCourse {
   id: number;
@@ -21,9 +27,12 @@ interface CanvasModule {
 }
 
 interface CanvasModuleItem {
+  id: number;
+  title: string;
   type: string;
   position: number;
   page_url?: string;
+  content_id?: number;
   published: boolean;
 }
 
@@ -130,9 +139,20 @@ async function main() {
 
   try {
     const chapters: string[] = [];
+    const tocEntries: string[] = [];
     let totalPages = 0;
+    let totalAssignments = 0;
 
     for (const [moduleIndex, module] of modules.entries()) {
+        tocEntries.push(`
+          <li class="toc-chapter">
+            <a href="#chapter-${moduleIndex + 1}">
+              ${moduleIndex + 1}. ${escapeHtml(module.name)}
+            </a>
+            <span class="toc-dots"></span>
+            <span class="toc-page">000</span>
+          </li>
+        `);
       console.log(
         `\nModule ${moduleIndex + 1}: ${module.name}`
       );
@@ -141,48 +161,148 @@ async function main() {
         `${coursePath}/modules/${module.id}/items`
       );
 
-      const pageItems = items
-        .filter(item => item.type === "Page" && item.page_url)
+      
+      const supportedItems = items
+        .filter(item =>
+          (item.type === "Page" && item.page_url) ||
+          (item.type === "Assignment" && item.content_id)
+        )
         .sort((a, b) => a.position - b.position);
 
       const lessons: string[] = [];
 
-      for (const [pageIndex, item] of pageItems.entries()) {
-        const canvasPage = await canvasGet<CanvasPage>(
-          `${coursePath}/pages/${encodeURIComponent(item.page_url!)}`
-        );
+      for (const [itemIndex, item] of supportedItems.entries()) {
 
-        const sanitizedContent = purify.sanitize(
-          canvasPage.body ?? "",
-          {
-            FORBID_TAGS: [
-              "script", "iframe", "object",
-              "embed", "form", "svg", "math"
-            ],
-            FORBID_ATTR: ["style", "srcset"]
-          }
-        );
+        const itemNumber = `${moduleIndex + 1}.${itemIndex + 1}`;
 
-        const safeContent = await embedCanvasImages(
-          sanitizedContent,
-          baseUrl,
-          token
-        );
+        const anchorId =
+          `lesson-${moduleIndex + 1}-${itemIndex + 1}`;
 
-        lessons.push(`
-          <section class="lesson">
-            <h2>${moduleIndex + 1}.${pageIndex + 1}
-              ${escapeHtml(canvasPage.title)}</h2>
-            <div>${safeContent}</div>
-          </section>
-        `);
+        // CANVAS-PAGINA VERWERKEN
 
-        totalPages++;
-        console.log(`  Toegevoegd: ${canvasPage.title}`);
+        if (item.type === "Page" && item.page_url) {
+
+          const canvasPage = await canvasGet<CanvasPage>(
+            `${coursePath}/pages/${encodeURIComponent(item.page_url)}`
+          );
+
+          const sanitizedContent = purify.sanitize(
+            canvasPage.body ?? "",
+            {
+              FORBID_TAGS: [
+                "script", "iframe", "object",
+                "embed", "form", "svg", "math"
+              ],
+              FORBID_ATTR: ["style", "srcset"]
+            }
+          );
+
+          const embeddedContent = await embedCanvasImages(
+            sanitizedContent,
+            baseUrl!,
+            token!
+          );
+
+          const safeContent = purify.sanitize(
+            embeddedContent,
+            {
+              FORBID_TAGS: [
+                "script", "iframe", "object",
+                "embed", "form", "svg", "math"
+              ],
+              FORBID_ATTR: ["style", "srcset"]
+            }
+          );
+
+          tocEntries.push(`
+            <li class="toc-lesson">
+              <a href="#${anchorId}">
+                ${itemNumber} ${escapeHtml(canvasPage.title)}
+              </a>
+              <span class="toc-dots"></span>
+              <span class="toc-page">000</span>
+            </li>
+          `);
+
+          lessons.push(`
+            <section class="lesson" id="${anchorId}">
+              <h2>
+                ${itemNumber} ${escapeHtml(canvasPage.title)}
+              </h2>
+              <div>${safeContent}</div>
+            </section>
+          `);
+
+          totalPages++;
+
+          console.log(`  Pagina toegevoegd: ${canvasPage.title}`);
+        }
+
+        // CANVAS-OPDRACHT VERWERKEN
+
+        else if (item.type === "Assignment" && item.content_id) {
+
+          const assignment = await getCanvasAssignment(
+            baseUrl!,
+            token!,
+            courseId!,
+            item.content_id
+          );
+
+          const sanitizedContent = purify.sanitize(
+            assignment.description ?? "",
+            {
+              FORBID_TAGS: [
+                "script", "iframe", "object",
+                "embed", "form", "svg", "math"
+              ],
+              FORBID_ATTR: ["style", "srcset"]
+            }
+          );
+
+          const embeddedContent = await embedCanvasImages(
+            sanitizedContent,
+            baseUrl!,
+            token!
+          );
+
+          const safeContent = purify.sanitize(
+            embeddedContent,
+            {
+              FORBID_TAGS: [
+                "script", "iframe", "object",
+                "embed", "form", "svg", "math"
+              ],
+              FORBID_ATTR: ["style", "srcset"]
+            }
+          );
+
+          tocEntries.push(`
+            <li class="toc-lesson toc-assignment">
+              <a href="#${anchorId}">
+                ${itemNumber} ${escapeHtml(assignment.name)}
+                [Opdracht]
+              </a>
+              <span class="toc-dots"></span>
+              <span class="toc-page">000</span>
+            </li>
+          `);
+
+          lessons.push(`
+            <section class="lesson" id="${anchorId}">
+              ${renderAssignment(assignment, safeContent)}
+            </section>
+          `);
+
+          totalAssignments++;
+
+          console.log(`  Opdracht toegevoegd: ${assignment.name}`);
+        }
       }
 
+
       chapters.push(`
-        <section class="chapter">
+        <section class="chapter" id="chapter-${moduleIndex + 1}">
           <h1>Hoofdstuk ${moduleIndex + 1}</h1>
           <h2>${escapeHtml(module.name)}</h2>
           ${lessons.join("\n")}
@@ -228,6 +348,39 @@ async function main() {
             break-before: page;
           }
 
+          .toc {
+            break-before: page;
+            break-after: page;
+          }
+
+          .toc ol {
+            list-style: none;
+            padding: 0;
+          }
+
+          .toc li {
+            margin-bottom: 8px;
+          }
+
+          .toc a {
+            color: #222;
+            text-decoration: none;
+          }
+
+          .toc-chapter {
+            font-size: 16px;
+            font-weight: bold;
+            margin-top: 18px;
+          }
+
+          .toc-lesson {
+            font-size: 13px;
+            padding-left: 24px;
+          }
+
+          .toc-lesson a {
+            color: #555;
+          }
           .lesson {
             margin-top: 30px;
           }
@@ -253,6 +406,36 @@ async function main() {
             background: #f1f3f5;
             padding: 12px;
           }
+
+          .toc li {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            break-inside: avoid;
+          }
+
+          .toc li a {
+            min-width: 0;
+          }
+
+          .toc-dots {
+            flex: 1;
+            min-width: 10px;
+            border-bottom: 1px dotted #999;
+          }
+
+          .toc-page {
+            flex: 0 0 45px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+          }
+          ${assignmentStyles}
+
+          .toc-assignment a {
+            font-style: italic;
+            color: #245a81;
+          }
         </style>
       </head>
       <body>
@@ -260,6 +443,13 @@ async function main() {
           <h1>${escapeHtml(course.name)}</h1>
           <p>${escapeHtml(course.course_code)}</p>
           <p>Canvas PDF Exporter</p>
+        </section>
+
+        <section class="toc">
+          <h1>Inhoudsopgave</h1>
+          <ol>
+            ${tocEntries.join("\n")}
+          </ol>
         </section>
 
         ${chapters.join("\n")}
@@ -281,11 +471,14 @@ async function main() {
         waitUntil: "load"
       });
 
-      const pdf = await page.pdf({
-        format: "A4",
+      
+      const pdfOptions = {
+        format: "A4" as const,
         printBackground: true,
         displayHeaderFooter: true,
+
         headerTemplate: "<span></span>",
+
         footerTemplate: `
           <div style="
             font-size: 9px;
@@ -296,13 +489,78 @@ async function main() {
             Pagina <span class="pageNumber"></span>
           </div>
         `,
+
         margin: {
           top: "20mm",
           bottom: "20mm",
           left: "20mm",
           right: "20mm"
         }
-      });
+      };
+
+      console.log("\nEerste PDF-generatie...");
+
+      const draftPdf = await page.pdf(pdfOptions);
+
+      console.log("Paginanummers analyseren...");
+
+      const destinations = await getPdfLinkDestinations(
+        draftPdf,
+        tocEntries.length
+      );
+
+      const pageNumbers = destinations.map(
+        destination => destination.targetPage
+      );
+
+      console.log(
+        `Aantal gekoppelde paginanummers: ${pageNumbers.length}`
+      );
+
+      // Paginanummers invoegen in de HTML.
+
+      await page.evaluate((numbers: number[]) => {
+
+        const elements = document.querySelectorAll(".toc-page");
+
+        if (elements.length !== numbers.length) {
+          throw new Error(
+            "Aantal inhoudsopgave-items komt niet overeen."
+          );
+        }
+
+        elements.forEach((element, index) => {
+          element.textContent = String(numbers[index]);
+        });
+
+      }, pageNumbers);
+
+      console.log("Tweede PDF-generatie...");
+
+      const pdf = await page.pdf(pdfOptions);
+
+      // Controleer de definitieve paginaverdeling.
+
+      console.log("Paginanummers valideren...");
+
+      const finalDestinations = await getPdfLinkDestinations(
+        pdf,
+        tocEntries.length
+      );
+
+      const isValid = finalDestinations.every(
+        (destination, index) =>
+          destination.targetPage === pageNumbers[index]
+      );
+
+      if (!isValid) {
+        throw new Error(
+          "Paginaverdeling is gewijzigd tijdens de tweede PDF-generatie."
+        );
+      }
+
+      console.log("Alle paginanummers zijn correct!");
+
 
       const outputDir = path.join(process.cwd(), "output");
       await mkdir(outputDir, { recursive: true });
@@ -317,6 +575,10 @@ async function main() {
       console.log("\nPDF succesvol gegenereerd!");
       console.log(`Modules verwerkt: ${modules.length}`);
       console.log(`Canvas-pagina's verwerkt: ${totalPages}`);
+      console.log(`Canvas-opdrachten verwerkt: ${totalAssignments}`);
+      console.log(
+        `Totaal module-items verwerkt: ${totalPages + totalAssignments}`
+      );
       console.log(`Bestand: ${outputPath}`);
     } finally {
       await browser.close();
